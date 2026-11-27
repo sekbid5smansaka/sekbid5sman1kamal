@@ -41,6 +41,18 @@
   };
   function infoCard(i) { return '<article class="card"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">' + pilChip(i.pilar || PIL[0].n) + '<small class="muted">' + tgl(i.tanggal_terbit) + '</small></div><h3 style="margin:10px 0 6px">' + esc(i.judul) + '</h3><p class="muted" style="font-size:14px">' + esc(i.ringkasan) + '</p></article>'; }
 
+  var PROFIL_DEF = { label: 'Visi Kebangsaan & Demokrasi Sekolah', judul: 'Menumbuhkan Kepemimpinan Inklusif & Berwawasan Kemanusiaan', deskripsi: 'Sekbid 5 OSIS SMAN 1 Kamal membina demokrasi, hak asasi manusia, pendidikan politik, kelestarian lingkungan, serta kepekaan dan toleransi sosial di tengah masyarakat yang majemuk.\n\nMelalui Pemilos, forum aspirasi, dan kegiatan peduli lingkungan, siswa belajar berpendapat secara santun, menghargai perbedaan, dan bertanggung jawab atas pilihannya.', local1: 'img/mandat.webp', cap1: 'Demokrasi & Pendidikan Politik' };
+  function profilSec() {
+    var b = B(), arr = b && b.profil && b.profil.length ? b.profil : [PROFIL_DEF];
+    return arr.map(function (x, n) {
+      var ph = [[x.id_foto1 ? 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(x.id_foto1) + '&sz=w1000' : x.local1 || '', x.cap1], [x.id_foto2 ? 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(x.id_foto2) + '&sz=w800' : '', x.cap2], [x.id_foto3 ? 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(x.id_foto3) + '&sz=w800' : '', x.cap3]].filter(function (f) { return f[0]; });
+      function fig(f, cls) { return '<figure class="' + cls + '"><img src="' + esc(f[0]) + '" alt="' + esc(f[1] || x.judul) + '" loading="lazy">' + (f[1] ? '<figcaption>' + esc(f[1]) + '</figcaption>' : '') + '</figure>'; }
+      var kol = ph.length ? '<div class="vph">' + fig(ph[0], 'vm') + (ph.length > 1 ? '<div class="vsm" style="grid-template-columns:repeat(' + (ph.length - 1) + ',1fr)">' + ph.slice(1).map(function (f) { return fig(f, 'vs'); }).join('') + '</div>' : '') + '</div>' : '';
+      var paras = String(x.deskripsi || '').split(/\n+/).filter(function (t) { return t.trim(); }).map(function (t) { return '<p>' + esc(t) + '</p>'; }).join('');
+      var st = [[x.stat1_angka, x.stat1_label], [x.stat2_angka, x.stat2_label]].filter(function (z) { return z[0]; });
+      return '<section class="sec"><div class="wrap"><div class="vis' + (!ph.length ? ' solo' : (n % 2 ? ' rev' : '')) + '">' + kol + '<div class="vtx">' + (x.label ? '<span class="chip">' + esc(x.label) + '</span>' : '') + '<h2 style="margin:10px 0">' + esc(x.judul) + '</h2>' + paras + (st.length ? '<div class="vst">' + st.map(function (z) { return '<div class="card"><b>' + esc(z[0]) + '</b><span>' + esc(z[1]) + '</span></div>'; }).join('') + '</div>' : '') + '</div></div></div></section>';
+    }).join('');
+  }
   function pengurusSec() {
     var b = B(), g = b && b.pengurus || []; if (!g.length) return '';
     var W = ['#1652F0', '#7B2FF7', '#22A06B', '#F7941D'], per = S('periode', '');
@@ -51,7 +63,7 @@
   P.tentang = function (el) {
     el.innerHTML = banner({ crumb: 'Tentang Sekbid 5', tag: 'PROFIL RESMI & LANDASAN YURIDIS ORGANISASI', judul: 'Sekbid 5 OSIS SMAN 1 Kamal', desk: esc(NAMA_RESMI) + '.', aksi: '<a class="btn w" href="#tugas-pokok" data-scroll="tugas-pokok">Pelajari 7 Tugas Pokok</a><a class="btn gl" href="#/program">Program Kerja</a>',
       sisi: '<small>Rujukan</small><p style="margin:6px 0;color:#fff;font-weight:700">Permendiknas Nomor 39 Tahun 2008</p><p style="font-size:13px;margin:0">tentang Pembinaan Kesiswaan</p>' + sg([['4', 'Pilar kegiatan'], ['7', 'Tugas pokok']]) }) +
-      '<section class="sec" id="tugas-pokok"><div class="wrap"><div class="eyebrow">Mandat kesiswaan</div><h2>7 Tugas Pokok Sekbid 5</h2><p class="muted" style="margin:6px 0 16px">Antara lain:</p><div class="tg2">' + TUGAS.map(function (t, i) { return '<div class="tugas-i"><span class="n">' + (i + 1) + '</span><span>' + esc(t) + '</span></div>'; }).join('') + '</div></div></section>' +
+      profilSec() + '<section class="sec" id="tugas-pokok"><div class="wrap"><div class="eyebrow">Mandat kesiswaan</div><h2>7 Tugas Pokok Sekbid 5</h2><p class="muted" style="margin:6px 0 16px">Antara lain:</p><div class="tg2">' + TUGAS.map(function (t, i) { return '<div class="tugas-i"><span class="n">' + (i + 1) + '</span><span>' + esc(t) + '</span></div>'; }).join('') + '</div></div></section>' +
       '<section class="sec"><div class="wrap"><div class="eyebrow">Fokus pengabdian</div><h2>Empat Pilar Kegiatan &amp; Contoh Program Kerja</h2><div class="grid g2" style="margin-top:18px">' + PIL.map(function (p, i) { return '<article class="pdet" style="border-top-color:' + p.c + '"><img src="' + esc(foto('pilar_foto_' + (i + 1), p.img + '.webp')) + '" alt="' + esc(p.n) + '" loading="lazy" width="1000" height="558"><div><h3>' + p.i + ' ' + esc(p.n) + '</h3><p class="muted" style="font-size:14px;margin-top:6px">' + esc(p.peran) + '</p><b style="font-size:14px;display:block;margin-top:10px">Contoh program kerja</b><ul>' + p.prog.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div></article>'; }).join('') + '</div></div></section>' +
       wrapSec('Sinergi dengan MPK', '', '<div class="card">Sekbid 5 berkoordinasi erat dengan Majelis Perwakilan Kelas (MPK), sebagai perwakilan aspirasi tiap kelas, dalam menjalankan survei dan menampung aspirasi.</div>') + pengurusSec() +
       '<section class="sec"><div class="wrap"><div class="cta2"><div><span class="tag">SUARAMU PENTING</span><h2>Ada Masukan, Saran Kebijakan, atau Laporan Kesiswaan?</h2><p>Sampaikan melalui kanal resmi SUARA SEKBID 5 SMAN 1 Kamal. Kami menjamin kerahasiaan identitas dan transparansi penanganan setiap masukan.</p></div><div class="ac2"><a class="btn w" href="#/aspirasi">Kirim Aspirasi Sekarang</a><a class="btn gl" href="#/program">Jadwal Program Kerja</a></div></div></div></section>';
@@ -139,5 +151,5 @@
   };
   P.transparansi.title = 'Transparansi';
 
-  SB.on.data = function () { var n = SB.cur().name; if (['beranda', 'program', 'dokumentasi', 'survei', 'transparansi'].indexOf(n) > -1 && !(document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))) SB.route(true); };
+  SB.on.data = function () { var n = SB.cur().name; if (['beranda', 'tentang', 'program', 'dokumentasi', 'survei', 'transparansi'].indexOf(n) > -1 && !(document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName))) SB.route(true); };
 })();
