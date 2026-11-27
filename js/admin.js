@@ -1,0 +1,277 @@
+/* admin.js — login OTP + panel pengurus. Data admin di-cache lokal (tampil instan), disegarkan di latar. */
+(function () {
+  var $ = SB.$, esc = SB.esc, P = SB.PAGES, api = SB.api;
+  var TABS = [['dasbor', '📈', 'Dasbor'], ['aspirasi', '💬', 'Aspirasi'], ['informasi', '📰', 'Informasi'], ['program', '📅', 'Program'], ['survei', '📊', 'Survei'], ['inspeksi', '🧭', 'Inspeksi'], ['laporan', '🧾', 'Laporan'], ['pengguna', '👥', 'Pengguna', 'AU'], ['notifikasi', '📣', 'Notifikasi & CRM', 'AU'], ['migrasi', '🔄', 'Migrasi', 'AU'], ['ai', '🤖', 'Penyedia AI', 'AU']];
+  var ST = ['Diterima', 'Sedang Dibahas', 'Terlaksana', 'Tidak Dapat Dilanjutkan'];
+  var A = SB.store.get('adm', null), view = null, charts = [];
+  function me() { return SB.store.get('me', {}); }
+  function ro() { return me().peran === 'Pemantau'; }
+  function au() { return me().peran === 'Admin Utama'; }
+  function tgl(s) { var d = new Date(s); return isNaN(d) ? '' : d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' }); }
+  function modal(html) { var m = document.createElement('div'); m.className = 'mod'; m.innerHTML = '<div role="dialog" aria-modal="true">' + html + '</div>'; document.body.appendChild(m); var o = { el: m, tutup: function () { m.remove(); document.removeEventListener('keydown', k); } }; function k(e) { if (e.key === 'Escape') o.tutup(); } document.addEventListener('keydown', k); m.onclick = function (e) { if (e.target === m) o.tutup(); }; return o; }
+  function konfirmasi(h, o) { o = o || {}; return new Promise(function (ok) { var m = modal('<p>' + h + '</p><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px"><button class="btn out" data-n>Batal</button><button class="btn ' + (o.bahaya ? 'red' : '') + '" data-y>' + esc(o.ok || 'Ya') + '</button></div>'); m.el.querySelector('[data-n]').onclick = function () { m.tutup(); ok(false); }; m.el.querySelector('[data-y]').onclick = function () { m.tutup(); ok(true); }; }); }
+  function stBadge(s) { return '<span class="st s' + Math.max(0, ST.indexOf(s)) + '">' + esc(s) + '</span>'; }
+  function lib(src, glob) { return window[glob] ? Promise.resolve() : new Promise(function (ok, no) { var s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = no; document.head.appendChild(s); }); }
+  function unduh(blob, nama) { var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = nama; document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 800); }
+  function kecil(file, maks) { return new Promise(function (ok, no) { var im = new Image(); im.onload = function () { var r = Math.min(1, maks / Math.max(im.width, im.height)), c = document.createElement('canvas'); c.width = im.width * r; c.height = im.height * r; c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); ok({ b64: c.toDataURL('image/jpeg', .8), mime: 'image/jpeg', nama: file.name.replace(/\.\w+$/, '') + '.jpg' }); }; im.onerror = no; im.src = URL.createObjectURL(file); }); }
+
+  /* ---------- Login OTP ---------- */
+  P.login = function (el) {
+    if (SB.store.get('token')) { location.hash = '#/admin/dasbor'; return; }
+    el.innerHTML = '<section class="sec"><div class="wrap" style="max-width:440px"><div class="card"><h2>Login Pengurus</h2><p class="muted" style="margin:6px 0 16px">Masukkan email terdaftar. Kode OTP dikirim ke email Anda (berlaku 10 menit).</p><form id="f1"><div class="fg"><label for="em">Email</label><input id="em" type="email" autocomplete="email" required></div><button class="btn" style="width:100%">Kirim kode OTP</button></form><form id="f2" hidden><div class="fg"><label for="kd">Kode OTP (6 angka)</label><input id="kd" inputmode="numeric" maxlength="6" autocomplete="one-time-code" required></div><button class="btn" style="width:100%">Masuk</button></form><div class="err" id="er" role="alert" style="margin-top:10px"></div></div></div></section>';
+    var em = '';
+    $('#f1').onsubmit = function (e) { e.preventDefault(); em = $('#em').value.trim(); var b = this.querySelector('button'); b.disabled = true; api('otp.minta', { email: em }).then(function (j) { b.disabled = false; if (!j.success) return $('#er').textContent = j.message; $('#f1').hidden = true; $('#f2').hidden = false; $('#kd').focus(); $('#er').textContent = j.message; }); };
+    $('#f2').onsubmit = function (e) { e.preventDefault(); var b = this.querySelector('button'); b.disabled = true; api('otp.masuk', { email: em, kode: $('#kd').value }).then(function (j) { b.disabled = false; if (!j.success) return $('#er').textContent = j.message; SB.store.set('token', j.data.token); SB.store.set('me', j.data.me); A = null; location.hash = '#/admin/dasbor'; }); };
+  };
+  P.login.title = 'Login Pengurus';
+
+  /* ---------- Cangkang konsol admin ---------- */
+  var AKSI = {}, MENU = [['Utama', [['dasbor', '📈', 'Dasbor'], ['aspirasi', '💬', 'Kelola Aspirasi']]], ['Konten', [['informasi', '📰', 'Informasi'], ['program', '📅', 'Program Kerja'], ['survei', '📊', 'Survei & Polling'], ['pengurus', '🧑‍🤝‍🧑', 'Pengurus'], ['konten', '🖼️', 'Pengaturan Konten']]], ['Operasional', [['inspeksi', '🧭', 'Inspeksi Lapangan'], ['laporan', '🧾', 'Laporan']]], ['Sistem', [['pengguna', '👥', 'Pengguna'], ['notifikasi', '📣', 'Notifikasi & CRM'], ['migrasi', '🔄', 'Migrasi Data'], ['ai', '🤖', 'Penyedia AI']], 'AU']];
+  function muatAdmin() {
+    return api('admin.boot', {}, { quiet: true }).then(function (j) { if (!j.success) { if (j.code !== 'AUTH') SB.toast(j.message, true); return; } A = j.data; SB.store.set('adm', A); SB.store.set('me', j.data.me); if (view && SB.cur().name === 'admin' && !document.querySelector('.mod') && !SB.noRefresh) tampil(); });
+  }
+  P.admin = function (el, tab) {
+    tab = tab || 'dasbor'; var m = me();
+    el.innerHTML = '<div class="ash"><aside class="aside"><div class="lg"><img class="lg-img" src="img/logo.png" alt="Logo SMAN 1 Kamal" width="36" height="42"><span>SUARA<br>SEKBID 5<small>PANEL PENGURUS</small></span></div>' + MENU.filter(function (g) { return !g[2] || au(); }).map(function (g) { return '<div class="gl">' + g[0].toUpperCase() + '</div>' + g[1].map(function (t) { return '<a class="m' + (t[0] === tab ? ' on' : '') + '" href="#/admin/' + t[0] + '">' + t[1] + ' ' + t[2] + '</a>'; }).join(''); }).join('') + '<div class="bt"><b>SMAN 1 KAMAL</b>Sistem Aspirasi & Gerakan Aksi Siswa OSIS–MPK.<button id="kl2">Keluar / Logout</button></div></aside>' +
+      '<div class="amain"><div class="atop"><h4>Admin Console</h4><span class="achip">Sekbid 5 SMAN 1 Kamal</span><span class="sp"></span><a class="btn sm out" href="#/beranda">🌐 Kembali ke Portal Publik</a><div style="line-height:1.25;text-align:right"><b style="font-size:13px;color:var(--navy)">' + esc(m.nama || m.email || '') + '</b><br><small class="muted">' + esc(m.peran || '') + '</small></div><button class="ib" id="kl" title="Keluar" aria-label="Keluar">⎋</button></div><main class="apg" id="pn"></main></div></div>';
+    function keluar(e) { e && e.preventDefault(); SB.store.del('token'); SB.store.del('me'); SB.store.del('adm'); A = null; location.hash = '#/beranda'; }
+    $('#kl').onclick = keluar; $('#kl2').onclick = keluar;
+    view = tab; if (A) tampil(); else $('#pn').innerHTML = '<div class="sk" style="min-height:240px"></div>';
+    muatAdmin();
+  };
+  P.admin.title = 'Panel Admin';
+  function pisah(x) { var j = String(x.nama_program || ''), d = String(x.deskripsi || ''), k = j.indexOf(': '); if (!d && k > 3 && k < 90) { d = j.slice(k + 2); j = j.slice(0, k); } return { j: j, d: d }; }
+  function cnt(a, f) { return (a || []).filter(f).length; }
+  function META(t) {
+    var d = A.d, s = d.stats, as = d.aspirasi, pr = d.program, sv = d.survei, hs = d.hasilSurvei, tot = Object.keys(hs).reduce(function (n, k) { return n + hs[k].total; }, 0);
+    var M = {
+      dasbor: { tag: 'Dasbor Sekbid 5', judul: 'Ringkasan Aspirasi & Aktivitas', desk: 'Pantau aspirasi masuk, tindak lanjut, dan aktivitas pengurus secara langsung.', aksi: [{ h: '#/admin/aspirasi', l: 'Buka Aspirasi', p: 1 }, { h: '#/transparansi', l: '🔎 Papan Publik', b: 1 }], kpis: [[s.total, 'Total aspirasi', 'sejak awal'], [s.perStatus['Diterima'] || 0, 'Menunggu ditinjau', 'status Diterima'], [s.perStatus['Terlaksana'] || 0, 'Terlaksana', 'tindak lanjut selesai'], [s.sensitif, 'Sensitif', 'dibatasi aksesnya']] },
+      aspirasi: { tag: 'Modul aspirasi', judul: 'Kelola Aspirasi Siswa', desk: 'Tinjau, ubah status, dan setujui ringkasan publik untuk Papan Transparansi.', aksi: [{ h: '#/admin/laporan', l: '⬇ Ekspor / Laporan', p: 1 }, { h: '#/transparansi', l: '🔎 Pratinjau Papan', b: 1 }], kpis: [[s.total, 'Total aspirasi', ''], [s.perStatus['Diterima'] || 0, 'Diterima', 'menunggu'], [s.perStatus['Sedang Dibahas'] || 0, 'Sedang dibahas', ''], [s.perStatus['Terlaksana'] || 0, 'Terlaksana', '']] },
+      informasi: { tag: 'Modul konten', judul: 'Kelola Informasi & Berita', desk: 'Tulis kabar dan edukasi yang tampil di beranda. Sembunyikan bila belum perlu, hapus bila tidak dipakai.', aksi: [{ k: 'tambah', l: '+ Tambah Informasi', p: 1, w: 1 }, { h: '#/beranda', l: '👁 Pratinjau Beranda', b: 1 }], kpis: [[d.informasi.length, 'Total informasi', ''], [cnt(d.informasi, function (x) { return x.status_tampil !== 'TIDAK'; }), 'Tampil di publik', ''], [cnt(d.informasi, function (x) { return x.status_tampil === 'TIDAK'; }), 'Disembunyikan', ''], [cnt(d.informasi, function (x) { return x.id_gambar; }), 'Berfoto', '']] },
+      program: { tag: 'Modul program', judul: 'Kelola Program Kerja', desk: 'Atur jadwal, judul, dan deskripsi tiap program agar mudah dibaca siswa.', aksi: [{ k: 'tambah', l: '+ Tambah Program', p: 1, w: 1 }, { h: '#/program', l: '👁 Pratinjau Halaman Siswa', b: 1 }], kpis: [[pr.length, 'Total program', ''], [cnt(pr, function (x) { return x.status === 'Direncanakan'; }), 'Direncanakan', ''], [cnt(pr, function (x) { return x.status === 'Berjalan'; }), 'Sedang berjalan', ''], [cnt(pr, function (x) { return x.status === 'Selesai'; }), 'Selesai', '']] },
+      survei: { tag: 'Modul survei', judul: 'Kelola Survei & Jajak Pendapat Siswa', desk: 'Buat instrumen survei, pantau jawaban, dan atur visibilitas hasil publik demi keterbukaan aspirasi.', aksi: [{ h: '#/survei', l: '👁 Pratinjau Halaman Siswa', b: 1 }, { k: 'ekspor', l: '⬇ Ekspor Hasil (.xlsx)' }, { k: 'tambah', l: '+ Buat Survei Baru', p: 1, w: 1 }], kpis: [[sv.length, 'Total instrumen', 'survei terdaftar'], [cnt(sv, function (x) { return x.status_aktif === 'YA'; }), 'Aktif berjalan', ''], [tot, 'Total jawaban', 'semua survei'], [cnt(sv, function (x) { return x.tampilkan_hasil === 'YA'; }), 'Hasil publik', 'ditampilkan ke siswa']] },
+      pengurus: { tag: 'Modul kepengurusan', judul: 'Kelola Pengurus Sekbid 5', desk: 'Data pengurus tampil di halaman Tentang. Unggah foto hanya dengan izin yang bersangkutan.', aksi: [{ k: 'tambah', l: '+ Tambah Pengurus', p: 1, w: 1 }, { h: '#/tentang', l: '👁 Pratinjau Halaman Tentang', b: 1 }], kpis: [[d.pengurus.length, 'Total pengurus', ''], [cnt(d.pengurus, function (x) { return x.status_tampil !== 'TIDAK'; }), 'Tampil di publik', ''], [cnt(d.pengurus, function (x) { return x.id_foto; }), 'Berfoto', ''], [d.konten.periode || '—', 'Periode', 'ubah di Pengaturan Konten']] },
+      konten: { tag: 'Pengaturan portal', judul: 'Pengaturan Konten & Foto', desk: 'Ubah teks beranda, foto hero, foto mandat, dan foto pilar tanpa menyentuh kode.', aksi: [{ h: '#/beranda', l: '👁 Pratinjau Beranda', b: 1, p: 1 }], kpis: [[['hero_foto', 'mandat_foto', 'pilar_foto_1', 'pilar_foto_2', 'pilar_foto_3', 'pilar_foto_4'].filter(function (k) { return d.konten[k]; }).length + ' / 6', 'Foto kustom', 'sisanya memakai foto bawaan'], [d.konten.periode || '—', 'Periode kepengurusan', ''], [d.pengurus.length, 'Pengurus', ''], [d.informasi.length, 'Informasi', '']] },
+      inspeksi: { tag: 'Modul lapangan', judul: 'Inspeksi Lapangan', desk: 'Ceklis pemantauan kondisi sekolah lengkap dengan foto bukti.', kpis: [[d.inspeksi.length, 'Total laporan', ''], [cnt(d.inspeksi, function (x) { return x.status === 'Baik'; }), 'Kondisi baik', ''], [cnt(d.inspeksi, function (x) { return x.status !== 'Baik'; }), 'Perlu tindak lanjut', ''], [cnt(d.inspeksi, function (x) { return x.id_foto; }), 'Dengan foto', '']] },
+      laporan: { tag: 'Modul laporan', judul: 'Laporan & Unduhan', desk: 'Unduh data aspirasi dalam Excel atau PDF sesuai filter periode, pilar, dan status.', kpis: [[s.total, 'Total aspirasi', ''], [s.perStatus['Terlaksana'] || 0, 'Terlaksana', ''], [s.sensitif, 'Sensitif', ''], [Object.keys(s.tren).length, 'Bulan tercatat', '']] },
+      pengguna: { tag: 'Modul akses', judul: 'Kelola Pengguna & Peran', desk: 'Hanya email terdaftar dan aktif yang dapat masuk. Minimal satu Admin Utama.', aksi: [{ k: 'tambah', l: '+ Tambah Pengguna', p: 1, w: 1 }], kpis: [[(d.pengguna || []).length, 'Total pengguna', ''], [cnt(d.pengguna, function (x) { return x.peran === 'Admin Utama'; }), 'Admin Utama', ''], [cnt(d.pengguna, function (x) { return x.peran === 'Admin'; }), 'Admin', ''], [cnt(d.pengguna, function (x) { return x.peran === 'Pemantau'; }), 'Pemantau', '']] },
+      notifikasi: { tag: 'Modul komunikasi', judul: 'Notifikasi WhatsApp, Email & CRM', desk: 'Bawaan: mati. Token Fonnte tersimpan di server, bukan di browser.' },
+      migrasi: { tag: 'Modul data', judul: 'Migrasi Data Lama', desk: 'Impor dari spreadsheet versi lama. Pindai dulu — tidak menulis apa pun.' },
+      ai: { tag: 'Modul AI', judul: 'Penyedia AI', desk: 'Kelola penyedia, model, dan urutan cadangan. Kunci API tersimpan aman di server.' }
+    }; return M[t] || M.dasbor;
+  }
+  function tampil() {
+    var pn = $('#pn'); if (!pn || !A) return; charts.forEach(function (c) { c.destroy && c.destroy(); }); charts = []; AKSI = {};
+    var m = META(view), ac = (m.aksi || []).filter(function (a) { return !(a.k === 'tambah' && ro()); });
+    pn.innerHTML = '<section class="abn"><div><span class="tg">▣ ' + esc(m.tag) + '</span><h1>' + esc(m.judul) + '</h1><p>' + esc(m.desk) + '</p></div>' + (ac.length ? '<div class="ac">' + ac.map(function (a) { var kl = 'btn ' + (a.p ? 'w' : 'gl'); return a.k ? '<button class="' + kl + '" data-ba="' + a.k + '">' + esc(a.l) + '</button>' : '<a class="' + kl + '" href="' + (a.b ? location.pathname + a.h : a.h) + '"' + (a.b ? ' target="_blank" rel="noopener"' : '') + '>' + esc(a.l) + '</a>'; }).join('') + '</div>' : '') + '</section>' +
+      (m.kpis ? '<div class="kpis">' + m.kpis.map(function (k) { return '<div class="kpi"><small>' + esc(k[1]) + '</small><b>' + esc(k[0]) + '</b><span>' + esc(k[2] || '') + '</span></div>'; }).join('') + '</div>' : '<div style="height:16px"></div>') + '<div id="isi"></div>';
+    pn.onclick = function (e) { var b = e.target.closest('[data-ba]'); if (b && AKSI[b.dataset.ba]) AKSI[b.dataset.ba](); };
+    (V[view] || V.dasbor)($('#isi'));
+  }
+  function judul(t, sub) { return ro() ? '<div class="note" style="margin-bottom:12px">Peran Pemantau: hanya baca.</div>' : ''; }
+  function sync() { return muatAdmin(); }
+  function chip(t, c) { return '<span class="chip"' + (c ? ' style="background:' + c + '1f;color:' + c + '"' : '') + '>' + esc(t) + '</span>'; }
+  function tg(on, k, id) { return '<button class="tgl' + (on ? ' on' : '') + '" data-tg="' + k + '" data-id="' + esc(id) + '" role="switch" aria-checked="' + !!on + '" aria-label="' + k + '"' + (ro() ? ' disabled' : '') + '></button>'; }
+  function gd(id, w) { return 'https://drive.google.com/thumbnail?id=' + encodeURIComponent(id) + '&sz=w' + (w || 200); }
+  function av(id, nama) { return id ? '<img class="av" loading="lazy" src="' + esc(gd(id, 120)) + '" alt="">' : '<span class="av">' + esc((nama || '?').trim().charAt(0).toUpperCase()) + '</span>'; }
+  var WP = { 'Demokrasi & Pendidikan Politik': '#1652F0', 'HAM & Anti-Perundungan': '#7B2FF7', 'Lingkungan Hidup': '#22A06B', 'Kepekaan & Toleransi Sosial': '#F7941D' };
+
+    var V = {};
+  V.dasbor = function (pn) {
+    var s = A.d.stats, pl = A.pilar, tr = Object.keys(s.tren).sort().slice(-12);
+    pn.innerHTML = judul() + '<div class="grid g2"><div class="card"><b>Per pilar</b><canvas id="c1" height="200"></canvas></div><div class="card"><b>Komposisi status</b><canvas id="c2" height="200"></canvas></div></div><div class="card" style="margin-top:16px"><b>Tren bulanan</b><canvas id="c3" height="120"></canvas></div>' +
+      '<div class="card" style="margin-top:16px"><b>Aktivitas terbaru</b><div class="tw" style="margin-top:8px;max-height:260px;overflow:auto"><table class="tbl"><tbody>' + A.d.log.slice(0, 15).map(function (l) { return '<tr><td>' + esc(String(l.timestamp).slice(0, 16).replace('T', ' ')) + '</td><td>' + esc(l.email) + '</td><td>' + esc(l.aksi) + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+    lib('https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js', 'Chart').then(function () {
+      if (!$('#c1')) return; var w = ['#1652F0', '#7B2FF7', '#22A06B', '#F7941D'], o = { plugins: { legend: { display: false } }, animation: { duration: 300 } };
+      charts.push(new Chart($('#c1'), { type: 'bar', data: { labels: pl.map(function (p) { return p.split(' ')[0]; }), datasets: [{ data: pl.map(function (p) { return s.perPilar[p] || 0; }), backgroundColor: w }] }, options: o }));
+      charts.push(new Chart($('#c2'), { type: 'doughnut', data: { labels: ST, datasets: [{ data: ST.map(function (x) { return s.perStatus[x] || 0; }), backgroundColor: ['#1652F0', '#F7941D', '#22A06B', '#E03137'] }] }, options: { animation: { duration: 300 } } }));
+      charts.push(new Chart($('#c3'), { type: 'line', data: { labels: tr, datasets: [{ data: tr.map(function (k) { return s.tren[k]; }), borderColor: '#1652F0', tension: .3, fill: false }] }, options: o }));
+    }).catch(function () { pn.querySelectorAll('canvas').forEach(function (c) { c.outerHTML = '<p class="muted">Grafik tidak dapat dimuat (offline).</p>'; }); });
+  };
+
+  V.aspirasi = function (pn) {
+    var f = { q: '', p: '', s: '', pg: 0 }, N = 25, all = A.d.aspirasi;
+    pn.innerHTML = judul() + '<div class="tool"><div class="ch" id="ch"></div><select id="fp" style="max-width:220px;border-radius:99px" aria-label="Filter pilar"><option value="">Semua pilar</option>' + A.pilar.map(function (p) { return '<option>' + esc(p) + '</option>'; }).join('') + '</select><input type="search" id="q" placeholder="Cari kode / isi aspirasi…" aria-label="Cari"></div><div class="tw"><table class="tbl cardtbl" id="tb"></table></div><div class="foot2" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><span id="ct"></span><span><button class="btn sm out" id="pv">‹</button> <button class="btn sm out" id="nx">›</button></span></div>';
+    function draw() {
+      var base = all.filter(function (a) { return (!f.p || a.pilar === f.p) && (!f.q || (a.kode_lacak + ' ' + (a.isi || '')).toLowerCase().indexOf(f.q) > -1); });
+      $('#ch').innerHTML = [['', 'Semua']].concat(ST.map(function (x) { return [x, x]; })).map(function (x) { return '<button data-s="' + esc(x[0]) + '" class="' + (f.s === x[0] ? 'on' : '') + '">' + esc(x[1]) + ' (' + cnt(base, function (a) { return !x[0] || a.status === x[0]; }) + ')</button>'; }).join('');
+      var r = base.filter(function (a) { return !f.s || a.status === f.s; }), n = r.length; r = r.slice(f.pg * N, f.pg * N + N);
+      $('#ct').textContent = 'Menampilkan ' + r.length + ' dari ' + n + ' aspirasi'; $('#pv').disabled = f.pg === 0; $('#nx').disabled = (f.pg + 1) * N >= n;
+      $('#tb').innerHTML = '<thead><tr><th>Kode & isi</th><th>Pilar</th><th>Tanggal</th><th>Status</th><th></th></tr></thead><tbody>' + (r.length ? r.map(function (a) { return '<tr data-i="' + esc(a.id) + '" style="cursor:pointer"><td><b>' + esc(a.kode_lacak) + '</b>' + (a.sensitif === 'YA' ? ' <span class="pill" style="background:#FDE8E8;color:#B3261E">Sensitif</span>' : '') + '<span class="dsc">' + esc((a.isi || '').slice(0, 110)) + '</span></td><td>' + chip(a.pilar, WP[a.pilar]) + '</td><td>' + tgl(a.tanggal) + '</td><td>' + stBadge(a.status) + '</td><td class="acts"><button class="ib" aria-label="Buka">›</button></td></tr>'; }).join('') : '<tr><td colspan="5" class="muted">Tidak ada data.</td></tr>') + '</tbody>';
+    }
+    $('#q').oninput = function () { f.q = this.value.toLowerCase(); f.pg = 0; draw(); }; $('#fp').onchange = function () { f.p = this.value; f.pg = 0; draw(); };
+    $('#ch').onclick = function (e) { var b = e.target.closest('[data-s]'); if (b) { f.s = b.dataset.s; f.pg = 0; draw(); } };
+    $('#pv').onclick = function () { f.pg--; draw(); }; $('#nx').onclick = function () { f.pg++; draw(); }; draw();
+    $('#tb').onclick = function (e) { var tr = e.target.closest('[data-i]'); if (tr) detail(tr.dataset.i, draw); };
+  };
+    function detail(id, redraw) {
+    var a = A.d.aspirasi.filter(function (x) { return x.id === id; })[0]; if (!a) return;
+    var edit = !ro() && !(a.dibatasi) , m = modal('<h3>' + esc(a.kode_lacak) + ' ' + stBadge(a.status) + '</h3><p class="muted">' + esc(a.pilar) + ' · ' + tgl(a.tanggal) + (a.anonim === 'YA' ? ' · Anonim' : a.nama ? ' · ' + esc(a.nama) + ' (' + esc(a.kelas) + ')' : '') + '</p>' + (a.judul ? '<b>' + esc(a.judul) + '</b>' : '') + '<p style="margin:10px 0;white-space:pre-wrap">' + esc(a.isi) + '</p>' +
+      (edit ? '<div class="fg"><label>Status</label><select id="ms">' + ST.map(function (s) { return '<option' + (s === a.status ? ' selected' : '') + '>' + s + '</option>'; }).join('') + '</select></div><div class="fg" id="al" hidden><label>Alasan (wajib)</label><input id="ma" value="' + esc(a.alasan || '') + '"></div><div class="fg"><label>Ringkasan publik (tanpa identitas)</label><textarea id="mr" style="min-height:80px" maxlength="300">' + esc(a.ringkasan_publik || '') + '</textarea></div><label class="chk"><input type="checkbox" id="mt"' + (a.tampil_publik === 'YA' ? ' checked' : '') + '> Tampilkan di Papan Transparansi</label>' + (au() ? '<label class="chk" style="margin-top:8px"><input type="checkbox" id="mx"' + (a.sensitif === 'YA' ? ' checked' : '') + '> Tandai sensitif</label>' : '') + '<div class="fg" style="margin-top:12px"><label>Catatan internal</label><textarea id="mc" style="min-height:70px">' + esc(a.catatan_internal || '') + '</textarea></div><div class="err" id="me"></div><div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn out" data-x>Batal</button><button class="btn" data-ok>Simpan</button></div>' : '<div style="text-align:right"><button class="btn out" data-x>Tutup</button></div>'));
+    m.el.querySelector('[data-x]').onclick = m.tutup; if (!edit) return;
+    function al() { m.el.querySelector('#al').hidden = m.el.querySelector('#ms').value !== ST[3]; } m.el.querySelector('#ms').onchange = al; al();
+    m.el.querySelector('[data-ok]').onclick = function () {
+      var g = function (i) { return m.el.querySelector(i); }, d = { id: id, status: g('#ms').value, alasan: g('#ma').value, ringkasan_publik: g('#mr').value, tampil_publik: g('#mt').checked, catatan_internal: g('#mc').value }; if (g('#mx')) d.sensitif = g('#mx').checked;
+      if (d.status === ST[3] && !d.alasan.trim()) return g('#me').textContent = 'Alasan wajib untuk status ini.'; if (d.tampil_publik && !d.ringkasan_publik.trim()) return g('#me').textContent = 'Isi ringkasan publik dulu.';
+      var lama = JSON.parse(JSON.stringify(a)); Object.assign(a, { status: d.status, alasan: d.alasan, ringkasan_publik: d.ringkasan_publik, tampil_publik: d.tampil_publik ? 'YA' : 'TIDAK', catatan_internal: d.catatan_internal }); if (g('#mx')) a.sensitif = d.sensitif ? 'YA' : 'TIDAK';   // optimistis: tampil instan
+      SB.store.set('adm', A); m.tutup(); redraw(); SB.toast('Menyimpan…');
+      api('aspirasi.ubah', d, { write: true }).then(function (j) { if (!j.success) { Object.assign(a, lama); SB.store.set('adm', A); redraw(); SB.toast(j.message + ' (perubahan dibatalkan)', true); } else { SB.toast('Aspirasi diperbarui.'); sync(); } });
+    };
+  }
+
+  /* ---- CRUD generik: Informasi, Program, Survei, Pengurus, Pengguna ---- */
+  function daftarCrud(pn, o) {
+    var f = { t: 0, q: '' };
+    pn.innerHTML = judul() + '<div class="tool"><div class="ch" id="ch"></div><input type="search" id="cq" placeholder="Cari…" aria-label="Cari"></div><div class="tw"><table class="tbl cardtbl" id="ct"></table></div><div class="foot2" id="cf"></div>';
+    function rows() { var tb = o.tabs && o.tabs[f.t]; return o.rows.filter(function (r) { return (!tb || !tb[1] || tb[1](r)) && (!f.q || JSON.stringify(r).toLowerCase().indexOf(f.q) > -1); }); }
+    function draw() {
+      var r = rows();
+      $('#ch').innerHTML = (o.tabs || []).map(function (t, i) { return '<button data-t="' + i + '" class="' + (i === f.t ? 'on' : '') + '">' + esc(t[0]) + ' (' + cnt(o.rows, t[1] || function () { return true; }) + ')</button>'; }).join('');
+      $('#ct').innerHTML = '<thead><tr>' + o.kolom.map(function (k) { return '<th>' + k[0] + '</th>'; }).join('') + '<th style="text-align:right">Tindakan</th></tr></thead><tbody>' + (r.length ? r.map(function (x) { return '<tr>' + o.kolom.map(function (k) { return '<td>' + (k[2] ? k[2](x) : esc(x[k[1]])) + '</td>'; }).join('') + '<td><div class="acts">' + (ro() ? '' : '<button class="ib" data-e="' + esc(x[o.kunci]) + '" aria-label="Ubah" title="Ubah">✎</button>' + (o.hapus ? '<button class="ib d" data-h="' + esc(x[o.kunci]) + '" aria-label="Hapus" title="Hapus">🗑</button>' : '')) + '</div></td></tr>'; }).join('') : '<tr><td colspan="9" class="muted">Belum ada data.</td></tr>') + '</tbody>';
+      $('#cf').textContent = 'Menampilkan ' + r.length + ' dari ' + o.rows.length + ' data';
+    }
+    draw(); if (!ro() && o.form) AKSI.tambah = function () { o.form(null); };
+    $('#cq').oninput = function () { f.q = this.value.toLowerCase(); draw(); };
+    function byId(id) { return o.rows.filter(function (q) { return String(q[o.kunci]) === String(id); })[0]; }
+    pn.onclick = function (e) {
+      var t = e.target.closest('[data-t]'); if (t) { f.t = +t.dataset.t; return draw(); }
+      var x = e.target.closest('[data-e]'); if (x) return o.form(byId(x.dataset.e));
+      var g = e.target.closest('[data-tg]'); if (g && !g.disabled) { var r = byId(g.dataset.id); return r && o.tg && o.tg(g.dataset.tg, r, !g.classList.contains('on'), g); }
+      var h = e.target.closest('[data-h]'); if (!h) return; var id = h.dataset.h, r2 = byId(id); if (!r2) return;
+      konfirmasi('Hapus <b>' + esc(r2[o.nama]) + '</b>? ' + (o.catatHapus || '') + ' Tindakan ini tidak bisa dibatalkan.', { bahaya: true, ok: 'Hapus' }).then(function (y) {
+        if (!y) return; var arr = A.d[o.daftar], i = arr.indexOf(r2); arr.splice(i, 1); SB.store.set('adm', A); tampil();                    // optimistis: baris langsung hilang
+        var d = {}; d.id = id; api(o.hapus, d, { write: true }).then(function (j) { if (!j.success) { arr.splice(i, 0, r2); SB.store.set('adm', A); tampil(); SB.toast(j.message + ' (dikembalikan)', true); } else { SB.toast('Data dihapus.'); sync(); } });
+      });
+    };
+  }
+  function togel(aksi, kunci, r, field, on, btn) {
+    var lama = r[field]; r[field] = on ? 'YA' : 'TIDAK'; btn.classList.toggle('on', on); btn.setAttribute('aria-checked', on); SB.store.set('adm', A);
+    var d = {}; d[kunci] = r[kunci]; d[field] = r[field];
+    api(aksi, d, { write: true }).then(function (j) { if (!j.success) { r[field] = lama; btn.classList.toggle('on', !on); SB.toast(j.message + ' (dikembalikan)', true); } else SB.toast('Tersimpan.'); });
+  }
+  function formModal(judulF, campur, onSave) { var m = modal('<h3>' + judulF + '</h3><div style="margin-top:12px">' + campur + '</div><div class="err" id="fe"></div><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px"><button class="btn out" data-x>Batal</button><button class="btn" data-ok>Simpan</button></div>'); m.el.querySelector('[data-x]').onclick = m.tutup; m.el.querySelector('[data-ok]').onclick = function () { var b = this; b.disabled = true; onSave(m, function (msg) { b.disabled = false; m.el.querySelector('#fe').textContent = msg || ''; }); }; return m; }
+  function fld(id, lab, v, tipe, opsi) { v = v == null ? '' : v; var inp = tipe === 'area' ? '<textarea id="' + id + '">' + esc(v) + '</textarea>' : tipe === 'sel' ? '<select id="' + id + '">' + opsi.map(function (o) { return '<option' + (o === v ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>' : '<input id="' + id + '" type="' + (tipe || 'text') + '" value="' + esc(v) + '">'; return '<div class="fg"><label for="' + id + '">' + lab + '</label>' + inp + '</div>'; }
+  function val(m, id) { return m.el.querySelector('#' + id).value; }
+  function simpan(aksi, d, m, gagal) { api(aksi, d, { write: true }).then(function (j) { if (!j.success) return gagal(j.message); m.tutup(); SB.toast(j.message || 'Tersimpan.'); sync(); }); }
+  function unggahFoto(fl) { return kecil(fl, 1280).then(function (im) { return api('berkas.unggah', im, { write: true }); }).then(function (j) { if (!j.success) throw new Error(j.message); return j.data.id; }); }
+  function tabsOn(nama, arr) { return arr.map(function (x) { return [x[0], x[1]]; }); }
+
+  V.informasi = function (pn) {
+    daftarCrud(pn, { rows: A.d.informasi, kunci: 'id', nama: 'judul', daftar: 'informasi', hapus: 'informasi.hapus', tabs: [['Semua', null], ['Tampil', function (r) { return r.status_tampil !== 'TIDAK'; }], ['Disembunyikan', function (r) { return r.status_tampil === 'TIDAK'; }]],
+      tg: function (k, r, on, b) { togel('informasi.simpan', 'id', r, 'status_tampil', on, b); },
+      kolom: [['Judul & ringkasan', 'judul', function (r) { return '<div style="display:flex;gap:10px;align-items:center">' + av(r.id_gambar, r.judul) + '<div><b>' + esc(r.judul) + '</b>' + (r.ringkasan ? '<span class="dsc">' + esc(String(r.ringkasan).slice(0, 140)) + '</span>' : '') + '</div></div>'; }], ['Pilar', 'pilar', function (r) { return chip(r.pilar, WP[r.pilar]); }], ['Terbit', 'tanggal_terbit', function (r) { return tgl(r.tanggal_terbit); }], ['Tampil', 'status_tampil', function (r) { return tg(r.status_tampil !== 'TIDAK', 'tampil', r.id); }]],
+      form: function (r) {
+        r = r || {}; formModal(r.id ? 'Ubah informasi' : 'Informasi baru', fld('i1', 'Judul', r.judul) + fld('i2', 'Pilar', r.pilar, 'sel', A.pilar) + fld('i3', 'Ringkasan', r.ringkasan, 'area') + fld('i4', 'Isi', r.isi, 'area') + fld('i5', 'Tampilkan?', r.status_tampil || 'YA', 'sel', ['YA', 'TIDAK']) + '<div class="fg"><label for="i6">Foto (opsional)</label><input id="i6" type="file" accept="image/*"></div>', function (m, gagal) {
+          var d = { id: r.id, judul: val(m, 'i1'), pilar: val(m, 'i2'), ringkasan: val(m, 'i3'), isi: val(m, 'i4'), status_tampil: val(m, 'i5'), id_gambar: r.id_gambar }, fl = m.el.querySelector('#i6').files[0];
+          if (!fl) return simpan('informasi.simpan', d, m, gagal); unggahFoto(fl).then(function (id) { d.id_gambar = id; simpan('informasi.simpan', d, m, gagal); }).catch(function (e) { gagal(e.message || 'Foto tidak dapat dibaca.'); });
+        });
+      } });
+  };
+  V.program = function (pn) {
+    daftarCrud(pn, { rows: A.d.program, kunci: 'id', nama: 'nama_program', daftar: 'program', hapus: 'program.hapus', tabs: [['Semua', null], ['Direncanakan', function (r) { return r.status === 'Direncanakan'; }], ['Berjalan', function (r) { return r.status === 'Berjalan'; }], ['Selesai', function (r) { return r.status === 'Selesai'; }]],
+      kolom: [['Program & deskripsi', 'nama_program', function (r) { var t = pisah(r); return '<b>' + esc(t.j) + '</b>' + (t.d ? '<span class="dsc">' + esc(t.d.slice(0, 160)) + '</span>' : ''); }], ['Pilar', 'pilar', function (r) { return chip(r.pilar, WP[r.pilar]); }], ['Jadwal', 'tanggal_mulai', function (r) { return tgl(r.tanggal_mulai) + (r.tanggal_selesai ? ' – ' + tgl(r.tanggal_selesai) : ''); }], ['Lokasi', 'lokasi'], ['Status', 'status', function (r) { return '<span class="pill">' + esc(r.status || '—') + '</span>'; }]],
+      form: function (r) {
+        r = r || {}; var jd = r.nama_program || '', ds = r.deskripsi || '', k = jd.indexOf(': ');
+        if (r.id && !ds && k > 3 && k < 90) { ds = jd.slice(k + 2); jd = jd.slice(0, k); }                 // data lama "Judul: deskripsi" dipisah otomatis (bisa diedit sebelum Simpan)
+        formModal(r.id ? 'Ubah program' : 'Program baru', fld('p1', 'Judul program', jd) + fld('p8', 'Deskripsi program', ds, 'area') + fld('p2', 'Pilar', r.pilar, 'sel', A.pilar) + fld('p3', 'Tanggal mulai', (r.tanggal_mulai || '').slice(0, 10), 'date') + fld('p4', 'Tanggal selesai', (r.tanggal_selesai || '').slice(0, 10), 'date') + fld('p5', 'Lokasi', r.lokasi) + fld('p6', 'Status', r.status || 'Direncanakan', 'sel', ['Direncanakan', 'Berjalan', 'Selesai']) + fld('p7', 'Link dokumentasi (Drive)', r.link_dokumentasi, 'url'), function (m, gagal) { simpan('program.simpan', { id: r.id, nama_program: val(m, 'p1'), deskripsi: val(m, 'p8'), pilar: val(m, 'p2'), tanggal_mulai: val(m, 'p3'), tanggal_selesai: val(m, 'p4'), lokasi: val(m, 'p5'), status: val(m, 'p6'), link_dokumentasi: val(m, 'p7') }, m, gagal); });
+      } });
+  };
+  V.survei = function (pn) {
+    AKSI.ekspor = function () { lib('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js', 'XLSX').then(function () { var rows = []; A.d.survei.forEach(function (sv) { var h = A.d.hasilSurvei[sv.id_survei] || { total: 0, hitung: {} }; Object.keys(h.hitung).forEach(function (o) { rows.push({ Survei: sv.judul, Pertanyaan: sv.pertanyaan, Opsi: o, Jumlah: h.hitung[o], 'Total jawaban': h.total }); }); }); if (!rows.length) return SB.toast('Belum ada hasil untuk diekspor.', true); var wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Hasil Survei'); XLSX.writeFile(wb, 'Hasil-Survei-' + new Date().toISOString().slice(0, 10) + '.xlsx'); }).catch(function () { SB.toast('Pustaka Excel tidak dapat dimuat. Periksa internet.', true); }); };
+    daftarCrud(pn, { rows: A.d.survei, kunci: 'id_survei', nama: 'judul', daftar: 'survei', hapus: 'survei.hapus', catatHapus: 'Semua jawaban survei ini ikut terhapus.', tabs: [['Semua', null], ['Aktif', function (r) { return r.status_aktif === 'YA'; }], ['Ditutup', function (r) { return r.status_aktif !== 'YA'; }]],
+      tg: function (k, r, on, b) { togel('survei.simpan', 'id_survei', r, k === 'hasil' ? 'tampilkan_hasil' : 'status_aktif', on, b); },
+      kolom: [['Judul instrumen', 'judul', function (r) { return '<b>' + esc(r.judul) + '</b><span class="dsc">' + esc(String(r.pertanyaan || '').slice(0, 140)) + '</span><span class="dsc">ID: ' + esc(r.id_survei) + '</span>'; }], ['Tipe', 'tipe'], ['Batas waktu', 'batas_waktu', function (r) { return r.batas_waktu ? tgl(r.batas_waktu) : '—'; }], ['Responden', 'id_survei', function (r) { var h = A.d.hasilSurvei[r.id_survei]; return (h ? h.total : 0) + ' siswa'; }], ['Aktif', 'status_aktif', function (r) { return tg(r.status_aktif === 'YA', 'aktif', r.id_survei); }], ['Hasil publik', 'tampilkan_hasil', function (r) { return tg(r.tampilkan_hasil === 'YA', 'hasil', r.id_survei); }]],
+      form: function (r) {
+        var baru = !r; r = r || {}; formModal(baru ? 'Survei baru' : 'Ubah survei', (baru ? fld('s1', 'Judul', '') + fld('s2', 'Pertanyaan', '', 'area') + fld('s3', 'Tipe', 'pilihan tunggal', 'sel', ['pilihan tunggal', 'pilihan ganda', 'skala 1–5']) + fld('s4', 'Pilihan (satu per baris)', '', 'area') : fld('s1', 'Judul', r.judul) + fld('s2', 'Pertanyaan', r.pertanyaan, 'area') + '<p class="muted" style="font-size:13px;margin-bottom:10px">Pilihan jawaban tidak dapat diubah agar hasil tetap konsisten. Untuk pilihan baru, buat survei baru.</p>') + fld('s5', 'Batas waktu', (r.batas_waktu || '').slice(0, 10), 'date') + fld('s6', 'Aktif?', r.status_aktif || 'YA', 'sel', ['YA', 'TIDAK']) + fld('s7', 'Tampilkan hasil ke publik?', r.tampilkan_hasil || 'TIDAK', 'sel', ['YA', 'TIDAK']), function (m, gagal) {
+          var d = { id_survei: r.id_survei, batas_waktu: val(m, 's5'), status_aktif: val(m, 's6'), tampilkan_hasil: val(m, 's7') }; if (!baru) { d.judul = val(m, 's1'); d.pertanyaan = val(m, 's2'); } if (baru) { d.judul = val(m, 's1'); d.pertanyaan = val(m, 's2'); d.tipe = val(m, 's3'); d.pilihan = val(m, 's4').split('\n').map(function (x) { return x.trim(); }).filter(Boolean); } simpan('survei.simpan', d, m, gagal);
+        });
+      } });
+  };
+  V.pengurus = function (pn) {
+    daftarCrud(pn, { rows: A.d.pengurus, kunci: 'id', nama: 'nama', daftar: 'pengurus', hapus: 'pengurus.hapus', tabs: [['Semua', null], ['Tampil', function (r) { return r.status_tampil !== 'TIDAK'; }], ['Disembunyikan', function (r) { return r.status_tampil === 'TIDAK'; }]],
+      tg: function (k, r, on, b) { togel('pengurus.simpan', 'id', r, 'status_tampil', on, b); },
+      kolom: [['Pengurus', 'nama', function (r) { return '<div style="display:flex;gap:10px;align-items:center">' + av(r.id_foto, r.nama) + '<div><b>' + esc(r.nama) + '</b><span class="dsc">' + esc(r.divisi) + '</span></div></div>'; }], ['Jabatan', 'jabatan', function (r) { return r.jabatan ? chip(r.jabatan) : '—'; }], ['Kelas', 'kelas'], ['Label', 'label'], ['Urutan', 'urutan'], ['Tampil', 'status_tampil', function (r) { return tg(r.status_tampil !== 'TIDAK', 'tampil', r.id); }]],
+      form: function (r) {
+        r = r || {}; formModal(r.id ? 'Ubah pengurus' : 'Pengurus baru', fld('g1', 'Nama lengkap', r.nama) + fld('g2', 'Jabatan (lencana kartu)', r.jabatan, 'text') + fld('g3', 'Divisi / peran', r.divisi) + fld('g4', 'Deskripsi tugas', r.deskripsi, 'area') + fld('g5', 'Kelas', r.kelas) + fld('g6', 'Label kanan (mis. OSIS 26/27)', r.label) + fld('g7', 'Urutan tampil', r.urutan || '', 'number') + fld('g8', 'Tampilkan?', r.status_tampil || 'YA', 'sel', ['YA', 'TIDAK']) + '<div class="fg"><label for="g9">Foto (opsional)</label><input id="g9" type="file" accept="image/*"><small class="muted">Unggah foto hanya dengan izin yang bersangkutan.</small></div>', function (m, gagal) {
+          var d = { id: r.id, nama: val(m, 'g1'), jabatan: val(m, 'g2'), divisi: val(m, 'g3'), deskripsi: val(m, 'g4'), kelas: val(m, 'g5'), label: val(m, 'g6'), urutan: val(m, 'g7'), status_tampil: val(m, 'g8'), id_foto: r.id_foto }, fl = m.el.querySelector('#g9').files[0];
+          if (!fl) return simpan('pengurus.simpan', d, m, gagal); unggahFoto(fl).then(function (id) { d.id_foto = id; simpan('pengurus.simpan', d, m, gagal); }).catch(function (e) { gagal(e.message || 'Foto tidak dapat dibaca.'); });
+        });
+      } });
+  };
+
+  /* ---- Pengaturan Konten & foto konten ---- */
+  var KT = [['slogan', 'Judul hero (pisahkan dengan koma)', 'Suaramu, Perubahan Kita'], ['hero_deskripsi', 'Deskripsi hero', 'Baca program kerja, isi survei, kirim aspirasi (boleh anonim), dan pantau tindak lanjutnya secara terbuka.', 'area'], ['hero_tag', 'Label foto hero', 'Suara Siswa, Aksi Nyata'], ['hero_cap_judul', 'Judul kartu foto hero', '7 Tugas Pokok Pembinaan Kesiswaan'], ['hero_cap_desk', 'Deskripsi kartu foto hero', 'Sekbid 5 OSIS SMAN 1 Kamal · Bangkalan, Pulau Madura'],
+    ['mandat_judul', 'Judul Mandat Kesiswaan', 'Membangun Karakter Melalui Edukasi Demokrasi & HAM'], ['mandat_teks', 'Teks Mandat Kesiswaan', 'Berlandaskan Permendiknas Nomor 39 Tahun 2008 tentang Pembinaan Kesiswaan, Sekbid 5 berkoordinasi dengan MPK untuk menampung aspirasi tiap kelas.', 'area'], ['mandat_cap_judul', 'Judul kartu foto mandat', 'Demokrasi & Pendidikan Politik'], ['mandat_cap_desk', 'Deskripsi kartu foto mandat', 'Pemilos, LDKS, debat, dan forum aspirasi siswa SMAN 1 Kamal.'],
+    ['periode', 'Periode kepengurusan (mis. 2026/2027)', ''], ['kontak_bk', 'Kontak Guru BK', ''], ['teks_mendesak', 'Pesan untuk kejadian mendesak', 'Untuk kejadian mendesak atau yang mengancam keselamatan, segera hubungi Guru BK atau orang dewasa tepercaya.', 'area']];
+  var FS = [['hero_foto', 'Foto Hero (beranda)', 'hero.webp'], ['mandat_foto', 'Foto Mandat Kesiswaan', 'mandat.webp'], ['pilar_foto_1', 'Pilar 1 · Demokrasi', 'pilar-demokrasi.webp'], ['pilar_foto_2', 'Pilar 2 · HAM', 'pilar-ham.webp'], ['pilar_foto_3', 'Pilar 3 · Lingkungan Hidup', 'pilar-lingkungan.webp'], ['pilar_foto_4', 'Pilar 4 · Toleransi Sosial', 'pilar-sosial.webp']];
+  V.konten = function (pn) {
+    var K = A.d.konten, ed = !ro();
+    function slot(x) { var id = K[x[0]]; return '<div class="slot"><img src="' + esc(id ? gd(id, 1000) : 'img/' + x[2]) + '" alt="' + esc(x[1]) + '" loading="lazy"><div><b style="font-size:14px">' + esc(x[1]) + '</b><br><small class="muted">' + (id ? 'Foto kustom' : 'Foto bawaan') + '</small>' + (ed ? '<div style="display:flex;gap:6px;margin-top:8px"><button class="btn sm" data-up="' + x[0] + '">Ganti foto</button>' + (id ? '<button class="btn sm out" data-rs="' + x[0] + '">Bawaan</button>' : '') + '</div>' : '') + '</div></div>'; }
+    pn.innerHTML = judul() + '<h3 style="margin-bottom:6px">Foto konten</h3><p class="muted" style="font-size:14px;margin-bottom:12px">Rasio 16:9 paling pas. Foto dikompres otomatis. Foto siswa hanya dengan izin. Perubahan tampil di portal dalam hitungan menit.</p><div class="grid g3" id="fo">' + FS.map(slot).join('') + '</div><input type="file" id="ff" accept="image/*" hidden>' +
+      '<h3 style="margin:26px 0 6px">Teks portal</h3><p class="muted" style="font-size:14px;margin-bottom:12px">Kosongkan kolom untuk memakai teks bawaan.</p><div class="card"><div class="grid g2">' + KT.map(function (x) { return '<div class="fg"><label for="k_' + x[0] + '">' + x[1] + '</label>' + (x[3] === 'area' ? '<textarea id="k_' + x[0] + '" style="min-height:90px"' : '<input id="k_' + x[0] + '"') + ' placeholder="' + esc(x[2]) + '"' + (ed ? '' : ' disabled') + (x[3] === 'area' ? '>' + esc(K[x[0]]) + '</textarea>' : ' value="' + esc(K[x[0]]) + '">') + '</div>'; }).join('') + '</div>' + (ed ? '<button class="btn" id="ks">Simpan teks</button>' : '') + '</div>';
+    var kunci = null;
+    function simp(nilai, ok) { api('konten.simpan', { nilai: nilai }, { write: true }).then(function (j) { if (!j.success) return SB.toast(j.message, true); Object.keys(nilai).forEach(function (k) { A.d.konten[k] = nilai[k]; }); SB.store.set('adm', A); SB.toast('Tersimpan.'); ok && ok(); }); }
+    pn.onclick = function (e) {
+      var u = e.target.closest('[data-up]'); if (u) { kunci = u.dataset.up; return $('#ff').click(); }
+      var r = e.target.closest('[data-rs]'); if (r) { var n = {}; n[r.dataset.rs] = ''; simp(n, function () { V.konten(pn); }); return; }
+      if (e.target.id === 'ks') { var v = {}; KT.forEach(function (x) { v[x[0]] = $('#k_' + x[0]).value; }); simp(v); }
+    };
+    $('#ff').onchange = function () { var fl = this.files[0]; this.value = ''; if (!fl || !kunci) return; var k = kunci; SB.toast('Mengunggah foto…'); unggahFoto(fl).then(function (id) { var n = {}; n[k] = id; simp(n, function () { V.konten(pn); }); }).catch(function (e) { SB.toast(e.message || 'Foto gagal diunggah.', true); }); };
+  };
+
+  /* ---- Inspeksi lapangan ---- */
+  var CEK = ['Kebersihan kelas terjaga', 'Sampah dipilah (organik/anorganik)', 'Tanaman kelas/halaman terawat', 'Poster anti-bullying terpasang', 'Papan aspirasi mudah dijangkau'];
+  V.inspeksi = function (pn) {
+    pn.innerHTML = judul('Inspeksi Lapangan', 'Ceklis pemantauan kondisi sekolah, lengkap dengan foto bukti.') + (ro() ? '' : '<form class="card" id="fi"><div class="fg"><label for="ti">Titik pantau</label><input id="ti" placeholder="mis. Kelas XI-3 / Taman depan" required></div>' + CEK.map(function (c, i) { return '<label class="chk" style="margin-bottom:6px"><input type="checkbox" data-c="' + i + '" checked> ' + esc(c) + '</label>'; }).join('') + '<div class="fg" style="margin-top:12px"><label for="ci">Catatan</label><textarea id="ci" style="min-height:70px"></textarea></div><div class="fg"><label for="fi2">Foto (opsional)</label><input id="fi2" type="file" accept="image/*" capture="environment"></div><div class="err" id="ie"></div><button class="btn">Simpan laporan</button></form>') +
+      '<h3 style="margin:20px 0 8px">Riwayat</h3><div class="tw"><table class="tbl cardtbl"><thead><tr><th>Tanggal</th><th>Titik</th><th>Hasil</th><th>Oleh</th></tr></thead><tbody>' + (A.d.inspeksi.length ? A.d.inspeksi.map(function (r) { var c = []; try { c = JSON.parse(r.ceklis_json); } catch (e) { } var x = c.filter(function (z) { return !z.ok; }).map(function (z) { return z.item; }); return '<tr><td>' + tgl(r.tanggal) + '</td><td>' + esc(r.titik) + (r.catatan ? '<br><small class="muted">' + esc(r.catatan) + '</small>' : '') + (r.id_foto ? ' 📷' : '') + '</td><td><span class="pill" style="background:' + (r.status === 'Baik' ? '#E8F7EF' : '#FFF0DB') + '">' + esc(r.status) + '</span>' + (x.length ? '<br><small>' + esc(x.join('; ')) + '</small>' : '') + '</td><td>' + esc(r.oleh) + '</td></tr>'; }).join('') : '<tr><td colspan="4" class="muted">Belum ada laporan.</td></tr>') + '</tbody></table></div>';
+    var f = $('#fi'); if (!f) return;
+    f.onsubmit = function (e) { e.preventDefault(); var b = f.querySelector('button'), d = { titik: $('#ti').value, catatan: $('#ci').value, ceklis: CEK.map(function (c, i) { return { item: c, ok: f.querySelector('[data-c="' + i + '"]').checked }; }) }, fl = $('#fi2').files[0]; b.disabled = true;
+      (fl ? kecil(fl, 1280).then(function (im) { d.foto = im; }) : Promise.resolve()).then(function () { return api('inspeksi.simpan', d, { write: true }); }).then(function (j) { b.disabled = false; if (!j.success) return $('#ie').textContent = j.message; SB.toast(j.message); sync(); });
+    };
+  };
+
+  /* ---- Laporan: Excel (klien) & PDF (server) ---- */
+  V.laporan = function (pn) {
+    pn.innerHTML = judul('Laporan', 'Unduh data aspirasi mengikuti filter di bawah.') + '<div class="card"><div class="grid g2"><div class="fg"><label for="l1">Dari tanggal</label><input id="l1" type="date"></div><div class="fg"><label for="l2">Sampai tanggal</label><input id="l2" type="date"></div><div class="fg"><label for="l3">Pilar</label><select id="l3"><option value="">Semua</option>' + A.pilar.map(function (p) { return '<option>' + esc(p) + '</option>'; }).join('') + '</select></div><div class="fg"><label for="l4">Status</label><select id="l4"><option value="">Semua</option>' + ST.map(function (p) { return '<option>' + p + '</option>'; }).join('') + '</select></div></div><div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" id="bx">⬇ Excel (.xlsx)</button><button class="btn out" id="bp">⬇ PDF</button></div></div>';
+    function flt() { return { mulai: $('#l1').value, selesai: $('#l2').value, pilar: $('#l3').value, status: $('#l4').value }; }
+    $('#bx').onclick = function () { var b = this; b.disabled = true; Promise.all([api('laporan.data', flt()), lib('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js', 'XLSX')]).then(function (r) { b.disabled = false; if (!r[0].success) return SB.toast(r[0].message, true); var ws = XLSX.utils.json_to_sheet(r[0].data.rows), wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Aspirasi'); XLSX.writeFile(wb, 'Aspirasi-' + new Date().toISOString().slice(0, 10) + '.xlsx'); }).catch(function () { b.disabled = false; SB.toast('Pustaka Excel tidak dapat dimuat. Periksa internet.', true); }); };
+    $('#bp').onclick = function () { var b = this; b.disabled = true; b.textContent = 'Menyusun PDF…'; api('laporan.pdf', flt()).then(function (j) { b.disabled = false; b.textContent = '⬇ PDF'; if (!j.success) return SB.toast(j.message, true); var bin = atob(j.data.b64), u = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); unduh(new Blob([u], { type: 'application/pdf' }), j.data.nama); }); };
+  };
+
+  /* ---- Pengguna ---- */
+  V.pengguna = function (pn) {
+    daftarCrud(pn, { rows: A.d.pengguna || [], kunci: 'email', nama: 'nama', daftar: 'pengguna', tabs: [['Semua', null], ['Admin Utama', function (r) { return r.peran === 'Admin Utama'; }], ['Admin', function (r) { return r.peran === 'Admin'; }], ['Pemantau', function (r) { return r.peran === 'Pemantau'; }]],
+      kolom: [['Pengguna', 'nama', function (r) { return '<div style="display:flex;gap:10px;align-items:center">' + av('', r.nama) + '<div><b>' + esc(r.nama) + '</b><span class="dsc">' + esc(r.email) + '</span></div></div>'; }], ['Peran', 'peran', function (r) { return chip(r.peran); }], ['Status', 'status_aktif', function (r) { return r.status_aktif === 'TIDAK' ? '<span class="pill" style="background:#FDE8E8">Nonaktif</span>' : '<span class="pill" style="background:#E8F7EF">Aktif</span>'; }], ['WhatsApp', 'wa']],
+      form: function (r) {
+        var baru = !r; r = r || {}; formModal(baru ? 'Pengguna baru' : 'Ubah pengguna', fld('u1', 'Email', r.email, 'email') + fld('u2', 'Nama', r.nama) + fld('u3', 'Peran', r.peran || 'Admin', 'sel', ['Admin Utama', 'Admin', 'Pemantau']) + fld('u4', 'Aktif?', r.status_aktif || 'YA', 'sel', ['YA', 'TIDAK']) + fld('u5', 'Nomor WhatsApp (opsional)', r.wa, 'tel'), function (m, gagal) { simpan('pengguna.simpan', { email: val(m, 'u1'), nama: val(m, 'u2'), peran: val(m, 'u3'), status_aktif: val(m, 'u4'), wa: val(m, 'u5') }, m, gagal); });
+      } });
+  };
+
+  /* ---- Notifikasi WA/Email + CRM ---- */
+  V.notifikasi = function (pn) {
+    pn.innerHTML = judul('Notifikasi & CRM', 'WhatsApp (Fonnte) dan email ke pengurus. Bawaan: MATI.') + '<div id="nt" class="sk"></div><h3 style="margin:22px 0 8px">Kontak (CRM)</h3><div id="cr" class="sk"></div>';
+    api('notif.status').then(function (j) {
+      if (!j.success) return $('#nt').outerHTML = '<p class="err">' + esc(j.message) + '</p>'; var s = j.data;
+      $('#nt').className = 'card'; $('#nt').innerHTML = '<label class="chk"><input type="checkbox" id="n1"' + (s.wa ? ' checked' : '') + '> Aktifkan notifikasi WhatsApp</label><label class="chk" style="margin-top:8px"><input type="checkbox" id="n2"' + (s.email ? ' checked' : '') + '> Aktifkan notifikasi email</label><label class="chk" style="margin-top:8px"><input type="checkbox" id="n3"' + (s.ringkasan ? ' checked' : '') + '> Gabungkan email aspirasi baru jadi ringkasan harian (hemat kuota)</label>' +
+        '<div class="fg" style="margin-top:14px"><label for="tk">Token Fonnte ' + (s.tokenAda ? '(tersimpan: ' + esc(s.token) + ')' : '(belum diisi)') + '</label><div style="display:flex;gap:8px"><input id="tk" type="password" placeholder="Tempel token baru" autocomplete="off"><button class="btn sm" id="tks">Simpan</button></div></div><p class="muted" style="font-size:13px">Antrean: ' + s.antre + ' menunggu · ' + s.gagal + ' gagal · sisa kuota email hari ini: ' + s.sisaEmail + '. Isi aspirasi tidak pernah dikirim lewat notifikasi.</p><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn sm" id="ns">Simpan pengaturan</button><button class="btn sm out" id="tw">Tes WA</button><button class="btn sm out" id="te">Tes email</button></div>';
+      $('#ns').onclick = function () { api('notif.simpan', { wa: $('#n1').checked, email: $('#n2').checked, ringkasan: $('#n3').checked }, { write: true }).then(function (r) { SB.toast(r.message, !r.success); }); };
+      $('#tks').onclick = function () { var v = $('#tk').value.trim(); if (!v) return SB.toast('Tempel token dulu.', true); api('rahasia.simpan', { kunci: 'FONNTE_TOKEN', nilai: v }).then(function (r) { SB.toast(r.message, !r.success); if (r.success) V.notifikasi(pn); }); };
+      $('#tw').onclick = function () { api('notif.tes', { kanal: 'WA' }).then(function (r) { SB.toast(r.message, !r.success); }); }; $('#te').onclick = function () { api('notif.tes', { kanal: 'EMAIL' }).then(function (r) { SB.toast(r.message, !r.success); }); };
+    });
+    api('crm.list', {}).then(function (j) { if (!j.success) return $('#cr').outerHTML = '<p class="err">' + esc(j.message) + '</p>'; $('#cr').className = ''; $('#cr').innerHTML = '<div class="tw"><table class="tbl cardtbl"><thead><tr><th>Nama</th><th>Email</th><th>WhatsApp</th><th>Segmen</th></tr></thead><tbody>' + j.data.rows.map(function (k) { return '<tr><td>' + esc(k.nama) + '</td><td>' + esc(k.email) + '</td><td>' + esc(k.wa) + '</td><td>' + esc(k.segmen) + '</td></tr>'; }).join('') + '</tbody></table></div><p class="muted" style="font-size:13px;margin-top:8px">' + j.data.total + ' kontak. Siswa pengirim aspirasi tidak pernah masuk CRM.</p>'; });
+  };
+
+  /* ---- Migrasi ---- */
+  V.migrasi = function (pn) {
+    pn.innerHTML = judul('Migrasi Data', 'Impor dari spreadsheet SUARA SEKBID 5 versi lama. Aman diulang; pindai dulu (tidak menulis apa pun).') + '<div class="card"><div class="fg"><label for="mg">Tautan / ID spreadsheet LAMA</label><input id="mg" placeholder="https://docs.google.com/spreadsheets/d/…"></div><div style="display:flex;gap:8px"><button class="btn out" id="m1">1. Pindai (dry-run)</button><button class="btn" id="m2" disabled>2. Jalankan impor</button></div><div id="mh" style="margin-top:14px"></div></div>';
+    function jalan(dry) { var s = $('#mg').value.trim(); if (!s) return SB.toast('Isi tautan spreadsheet dulu.', true); api(dry ? 'migrasi.pindai' : 'migrasi.jalankan', { sumber: s }, { write: !dry }).then(function (j) { if (!j.success) return $('#mh').innerHTML = '<p class="err">' + esc(j.message) + '</p>'; var l = j.data.laporan; $('#mh').innerHTML = '<p><b>' + esc(j.message) + '</b></p><div class="tw"><table class="tbl"><thead><tr><th>Sheet</th><th>Sumber</th><th>Baru</th><th>Diperbarui</th><th>Dilewati</th></tr></thead><tbody>' + Object.keys(l).map(function (k) { var r = l[k]; return '<tr><td>' + esc(k) + '</td><td>' + esc(r.sumber) + '</td><td>' + (r.ditambah || 0) + '</td><td>' + (r.diperbarui || 0) + '</td><td>' + (r.dilewati || 0) + '</td></tr>'; }).join('') + '</tbody></table></div>' + (j.data.peringatan || []).map(function (p) { return '<p class="note" style="margin-top:8px">' + esc(p) + '</p>'; }).join(''); if (dry) $('#m2').disabled = false; else sync(); }); }
+    $('#m1').onclick = function () { jalan(true); }; $('#m2').onclick = function () { konfirmasi('Jalankan impor sekarang? Data lama tidak dihapus dan baris yang sudah ada tidak digandakan.', { ok: 'Impor' }).then(function (y) { if (y) jalan(false); }); };
+  };
+
+  /* ---- Penyedia AI (modul setup-ai-api) ---- */
+  V.ai = function (pn) {
+    pn.innerHTML = judul('Penyedia AI', 'Kunci API tersimpan aman di server (Script Properties), tidak pernah di browser.') + '<div id="aiw"></div>';
+    function pasang() { if (!window.AiSetup) return setTimeout(pasang, 150); AiSetup.pasang($('#aiw'), { api: api, toast: function (m, t) { SB.toast(m, t === 'bad'); }, konfirmasi: konfirmasi, panel: function (o) { var m = modal('<h3>' + esc(o.judul) + '</h3><div style="margin-top:12px">' + o.isi + '</div>'); return { el: m.el, tutup: m.tutup }; }, ikon: function (n) { return { hapus: '🗑', info: 'ℹ️', muat: '↻', naik: '▲', tambah: '＋', tautan: '↗', turun: '▼', ubah: '✎', uji: '▶' }[n] || ''; }, saatBerubah: function () { } }); }
+    pasang();
+  };
+})();
